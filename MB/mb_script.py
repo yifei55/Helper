@@ -60,7 +60,26 @@ def create_output_excel(data_list, output_file):
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal='center')
 
-    customer_items = sorted(list(set([item["customer_item"] for item in data_list])))
+    # Define the desired order
+    desired_order = [
+        "A2238305705",
+        "A2238305706",
+        "A2068305905",
+        "A2548302703",
+        "A2148308201",
+        "A2978306501",
+        "A2979970200",
+        "A2979970600",
+        "A0005003700",
+        "A0005003101",
+        "A0005004901",
+        "A0005005301",
+        "A0005002901",
+    ]
+
+    # Extract customer items and sort them based on the desired order or alphabetically
+    customer_items = sorted(list(set([item["customer_item"] for item in data_list])), key=lambda x: (desired_order.index(x) if x in desired_order else len(desired_order)))
+
     for customer_item in customer_items:
         row_data = [customer_item]
         for cw in all_calendar_weeks:
