@@ -79,6 +79,58 @@ def extract_data_from_excel(input_file):
         print(f"Warning: An unexpected error occurred while processing '{input_file}': {e}")
         return None
 
+def generate_calendar_weeks(start_week, end_week):
+    """Generates a list of calendar weeks between start_week and end_week (inclusive)."""
+    start_year = int(start_week[:2])
+    start_week_num = int(start_week[4:])
+    end_year = int(end_week[:2])
+    end_week_num = int(end_week[4:])
+
+    calendar_weeks = []
+    current_year = start_year
+    current_week_num = start_week_num
+
+    while True:
+        calendar_weeks.append(f"{current_year:02d}CW{current_week_num:02d}")
+        if current_year == end_year and current_week_num == end_week_num:
+            break
+        current_week_num += 1
+        if current_week_num > 53:
+            current_week_num = 1
+            current_year += 1
+            if current_year > 99:
+                current_year = 0
+    return calendar_weeks
+
+def post_process_calendar_weeks(data_list):
+    """Inserts missing calendar weeks into the data, filling with 0 quantities."""
+    if not data_list:
+        return []
+
+    # Create a DataFrame for easier manipulation
+    df = pd.DataFrame(data_list)
+
+    # Get unique customer items and calendar weeks
+    customer_items = df["customer_item"].unique()
+    calendar_weeks = df["calendar_week"].unique()
+
+    # Sort calendar weeks
+    calendar_weeks.sort()
+
+    # Determine the full range of calendar weeks
+    start_week = calendar_weeks[0]
+    end_week = calendar_weeks[-1]
+    all_calendar_weeks = generate_calendar_weeks(start_week, end_week)
+
+    # Create a new DataFrame with all calendar weeks
+    all_data = []
+    for item in customer_items:
+        for week in all_calendar_weeks:
+            quantity = df[(df["customer_item"] == item) & (df["calendar_week"] == week)]["quantity"].iloc[0] if (df[(df["customer_item"] == item) & (df["calendar_week"] == week)]["quantity"].any()) else 0
+            all_data.append({"customer_item": item, "calendar_week": week, "quantity": quantity})
+
+    return all_data
+
 def create_output_excel(data_list, output_file):
     """
     Creates a formatted Excel file with a pivot table-like structure, showing all calendar weeks,
@@ -88,7 +140,8 @@ def create_output_excel(data_list, output_file):
         print("No data to create output Excel file.")
         return
 
-    # Get all unique calendar weeks and sort them (oldest first)
+    # Get all unique customer items and calendar weeks
+    customer_items = sorted(list(set([item["customer_item"] for item in data_list])))
     all_calendar_weeks = sorted(list(set([item["calendar_week"] for item in data_list])))
 
     # Get the current calendar week
@@ -120,15 +173,11 @@ def create_output_excel(data_list, output_file):
         pass  # Current calendar week not found in the data
 
     # Create data rows
-    customer_items = sorted(list(set([item["customer_item"] for item in data_list])))
     for customer_item in customer_items:
         row_data = [customer_item]
         for cw in all_calendar_weeks:
-            quantity = 0
-            for item in data_list:
-                if item["customer_item"] == customer_item and item["calendar_week"] == cw:
-                    quantity = item["quantity"]
-                    break
+            # Find the quantity for this customer item and calendar week, or default to 0
+            quantity = next((item["quantity"] for item in data_list if item["customer_item"] == customer_item and item["calendar_week"] == cw), 0)
             row_data.append(quantity)
         ws.append(row_data)
 
@@ -186,6 +235,12 @@ def process_all_excel_files():
             processed_files.append(file)
         else:
             print(f"Warning: File '{file}' was skipped due to an error.")
+
+    # --- INSERTION POINT ---
+    # Post-processing step: Insert missing calendar weeks
+    if all_data:  # Only post-process if there's data
+        all_data = post_process_calendar_weeks(all_data)
+    # --- END INSERTION POINT ---
 
     # Create the output file
     if all_data:
