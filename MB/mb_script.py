@@ -1,14 +1,26 @@
 import pandas as pd
 import os
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 import re
-from datetime import datetime, date  # Import date class
+from datetime import datetime, date
+import zipfile
 
-def process_mb_files(input_dir, output_file):
+def get_current_calendar_week():
+    """Calculates the current calendar week in the format 'WW/YYYY'."""
+    now = date.today()
+    year, week, _ = now.isocalendar()
+    return f"{week:02d}/{year}"
+
+def process_mb_files(input_dir, output_file, mercedes_file):
+    """Processes MB files, extracts data, and updates the Mercedes file."""
     all_data = []
+    all_data_bedarfs = []
+    print(f"Processing files in directory: {input_dir}")  # Add this line
     for filename in os.listdir(input_dir):
-        if filename.endswith(('.xls', '.xlsx')) and not filename.startswith("mb_extracted_data_"):
+        print(f"Checking file: {filename}")  # Add this line
+        if filename.endswith(('.xls', '.xlsx')) and not filename.startswith(("mb_extracted_data_", "~$")) and filename != os.path.basename(mercedes_file):
+            print(f"Processing file: {filename}")  # Add this line
             filepath = os.path.join(input_dir, filename)
             try:
                 df = pd.read_excel(filepath, sheet_name="Zeitraum bis Bedarfsende", header=None)
@@ -18,27 +30,165 @@ def process_mb_files(input_dir, output_file):
                 if customer_item is None:
                     print(f"Warning: Could not extract Customer Item from {filename}")
                     continue
+                print(f"Sachnummer found: {customer_item}")
 
+                # Extract calendar weeks from row 6 (index 5)
                 calendar_weeks = df.iloc[5, 1:].tolist()
-                quantities = df.iloc[7, 1:].tolist()
 
-                temp_data = []
-                for cw, qty in zip(calendar_weeks, quantities):
+                # Extract data for Bedarf
+                quantities_bedarf = df.iloc[7, 1:].tolist()
+                temp_data_bedarf = []
+                for cw, qty in zip(calendar_weeks, quantities_bedarf):
                     if pd.notna(cw) and pd.notna(qty):
-                        temp_data.append({"customer_item": customer_item, "calendar_week": cw, "quantity": int(qty)})
+                        temp_data_bedarf.append({"customer_item": customer_item, "calendar_week": cw, "quantity": int(qty)})
+                temp_data_bedarf.sort(key=lambda x: (int(x['calendar_week'].split('/')[1]), int(x['calendar_week'].split('/')[0])))
+                all_data_bedarfs.extend(temp_data_bedarf)
 
-                # Sort by year, then month
-                temp_data.sort(key=lambda x: (int(x['calendar_week'].split('/')[1]), int(x['calendar_week'].split('/')[0])))
-                all_data.extend(temp_data)
+                # Find rows with "ABS" followed by a number
+                abs_rows = []
+                for index, row in df.iterrows():
+                    first_cell_value = row.iloc[0]
+                    if isinstance(first_cell_value, str) and re.match(r"^\s*ABS\s+\d+\w*", first_cell_value):
+                        abs_rows.append(index)
+                if abs_rows:
+                    print(f"ABS rows found in {filename}")
+                else:
+                    print(f"No ABS rows found in {filename}")
+
+                # Extract data for each ABS row
+                for row_index in abs_rows:
+                    abs_value_raw = df.iloc[row_index, 0].strip()
+                    if isinstance(abs_value_raw, str) and abs_value_raw.startswith("ABS "):
+                        abs_value = abs_value_raw.split(" ", 1)[1]
+                    else:
+                        abs_value = abs_value_raw
+                    quantities = df.iloc[row_index, 1:].tolist()
+
+                    # Get current week index
+                    current_week = get_current_calendar_week()
+                    try:
+                        current_week_index = calendar_weeks.index(current_week)
+                    except ValueError:
+                        print(f"Warning: Current week {current_week} not found in {filename}")
+                        continue
+
+                    # Extract the 5 data points
+                    extracted_quantities = quantities[current_week_index:current_week_index + 5]
+
+                    # Ensure we have 5 data points, fill with None if not enough
+                    while len(extracted_quantities) < 5:
+                        extracted_quantities.append(None)
+
+                    all_data.append({
+                        "customer_item": customer_item,
+                        "abs_value": abs_value,
+                        "quantities": extracted_quantities,
+                        "calendar_weeks": [calendar_weeks[i] if i < len(calendar_weeks) else None for i in range(current_week_index, current_week_index + 5)]
+                    })
 
             except Exception as e:
                 print(f"Error processing {filename}: {e}")
 
     if all_data:
-        create_output_excel(all_data, output_file)
+        update_mercedes_file(all_data, mercedes_file)
+    if all_data_bedarfs:
+        create_output_excel(all_data_bedarfs, output_file)
         print(f"Output saved to: {output_file}")
     else:
         print("No data found.")
+
+def update_mercedes_file(data_list, mercedes_file):
+    """Updates the Mercedes file with extracted data."""
+    print(f"Attempting to load Mercedes file: {mercedes_file}")  # Debugging line
+    if not os.path.exists(mercedes_file):
+        print(f"Error: Mercedes file '{mercedes_file}' not found.")
+        return
+    print(f"Mercedes file exists: {mercedes_file}")
+    try:
+        wb = load_workbook(mercedes_file)
+        print(f"Mercedes file loaded successfully: {mercedes_file}")
+        ws = wb["EDI"]  # Access the "EDI" sheet
+    except FileNotFoundError:
+        print(f"Error: Mercedes file '{mercedes_file}' not found.")
+        return
+    except KeyError:
+        print(f"Error: Sheet 'EDI' not found in '{mercedes_file}'.")
+        return
+    except PermissionError:
+        print(f"Error: Permission denied to access '{mercedes_file}'. Is the file open in another program?")
+        return
+    except zipfile.BadZipFile:
+        print(f"Error: '{mercedes_file}' is corrupted or not a valid Excel file.")
+        return
+    except Exception as e:
+        print(f"Error loading Mercedes file: {e}")
+        return
+
+    header_font = Font(bold=True)
+    yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+
+    # Create a dictionary to store existing data for faster lookup
+    existing_data = {}
+    print("\nExisting data in Mercedes file:")  # Debugging line
+    for row in ws.iter_rows(min_row=2):
+        sachnummer = row[3].value
+        abs_value_raw = row[6].value
+        if sachnummer and abs_value_raw:
+            if isinstance(abs_value_raw, str) and abs_value_raw.startswith("ABS "):
+                abs_value = abs_value_raw.split(" ", 1)[1]
+                row[6].value = abs_value
+            else:
+                abs_value = abs_value_raw
+            existing_data[(sachnummer, str(abs_value))] = row
+            print(f"  Sachnummer: {sachnummer} (type: {type(sachnummer)}), ABS: {abs_value} (type: {type(abs_value)})")  # Debugging line
+
+    print("\nIncoming data from input files:")  # Debugging line
+    for data in data_list:
+        sachnummer = data["customer_item"]
+        abs_value = data["abs_value"]
+        quantities = data["quantities"]
+        calendar_weeks = data["calendar_weeks"]
+        print(f"  Sachnummer: {sachnummer} (type: {type(sachnummer)}), ABS: {abs_value} (type: {type(abs_value)})")  # Debugging line
+
+        # Find the row or create a new one
+        match_key = (sachnummer, str(abs_value))
+        if match_key in existing_data:
+            print(f"    Match found! Key: {match_key}")  # Debugging line
+            row = existing_data[match_key]
+            print(f"    Data before filling: {[cell.value for cell in row]}")
+        else:
+            print(f"    No match found. Adding new row. Key: {match_key}")  # Debugging line
+            print(f"    --------------------------------")  # Debugging line
+            # Add a new row
+            new_row = [None] * ws.max_column
+            ws.append(new_row)
+            rows_list = list(ws.rows)
+            row = rows_list[-1]
+            row[3].value = sachnummer  # Sachnummer
+            row[6].value = abs_value  # ABS
+            # Highlight the new row in yellow
+            for cell in row:
+                cell.fill = yellow_fill
+            print(f"    New row added: {[cell.value for cell in row]}")
+
+        # Fill in the quantities and calendar weeks
+        columns = [11, 13, 15, 17, 19]  # K, M, O, Q, S (Corrected indices)
+        for i, (qty, cw) in enumerate(zip(quantities, calendar_weeks)):
+            if qty is not None:
+                row[columns[i]-1].value = qty
+            if cw is not None:
+                ws.cell(row=1, column=columns[i]).value = cw
+        print(f"    Data after filling: {[cell.value for cell in row]}")
+
+    try:
+        wb.save(mercedes_file)
+    except PermissionError:
+        print(f"Error: Permission denied to save '{mercedes_file}'. Is the file open in another program?")
+        return
+    except Exception as e:
+        print(f"Error saving Mercedes file: {e}")
+        return
+
 
 def create_output_excel(data_list, output_file):
     if not data_list:
@@ -110,7 +260,8 @@ def create_output_excel(data_list, output_file):
     wb.save(output_file)
 
 if __name__ == "__main__":
-    input_directory = os.getcwd()
+    input_directory = os.path.dirname(os.path.abspath(__file__))
     timestamp = datetime.now().strftime("%y%m%d_%H%M")
     output_excel_file = f"mb_extracted_data_{timestamp}.xlsx"
-    process_mb_files(input_directory, output_excel_file)
+    mercedes_excel_file = "Mercedes_Shipping_Plan_EDI.xlsx"
+    process_mb_files(input_directory, output_excel_file, mercedes_excel_file)
