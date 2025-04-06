@@ -16,6 +16,7 @@ def process_mb_files(input_dir, output_file, mercedes_file):
     """Processes MB files, extracts data, and updates the Mercedes file."""
     all_data = []
     all_data_bedarfs = []
+    all_data_ruckstand = []
     print(f"Processing files in directory: {input_dir}")  # Add this line
     for filename in os.listdir(input_dir):
         print(f"Checking file: {filename}")  # Add this line
@@ -85,21 +86,33 @@ def process_mb_files(input_dir, output_file, mercedes_file):
                         "quantities": extracted_quantities,
                         "calendar_weeks": [calendar_weeks[i] if i < len(calendar_weeks) else None for i in range(current_week_index, current_week_index + 5)]
                     })
+                # Extract data for Rückstand
+                df_bkm = pd.read_excel(filepath, sheet_name="BKM Lieferbeziehung", header=None)
+                for row_index in abs_rows:
+                    abs_value_raw = df.iloc[row_index, 0].strip()
+                    if isinstance(abs_value_raw, str) and abs_value_raw.startswith("ABS "):
+                        abs_value = abs_value_raw.split(" ", 1)[1]
+                    else:
+                        abs_value = abs_value_raw
+                    ruckstand = df_bkm.iloc[row_index, 21]
+                    all_data_ruckstand.append({
+                        "customer_item": customer_item,
+                        "abs_value": abs_value,
+                        "ruckstand":ruckstand
+                    })
 
             except Exception as e:
                 print(f"Error processing {filename}: {e}")
 
     if all_data:
-        update_mercedes_file(all_data, mercedes_file)
+        update_mercedes_file(all_data, all_data_ruckstand, mercedes_file)
     if all_data_bedarfs:
         create_output_excel(all_data_bedarfs, output_file)
         print(f"Output saved to: {output_file}")
     else:
         print("No data found.")
 
-def update_mercedes_file(data_list, mercedes_file):
-    """Updates the Mercedes file with extracted data."""
-    print(f"Attempting to load Mercedes file: {mercedes_file}")  # Debugging line
+def update_mercedes_file(data_list, data_list_ruckstand, mercedes_file):
     if not os.path.exists(mercedes_file):
         print(f"Error: Mercedes file '{mercedes_file}' not found.")
         return
@@ -129,7 +142,6 @@ def update_mercedes_file(data_list, mercedes_file):
 
     # Create a dictionary to store existing data for faster lookup
     existing_data = {}
-    print("\nExisting data in Mercedes file:")  # Debugging line
     for row in ws.iter_rows(min_row=2):
         sachnummer = row[3].value
         abs_value_raw = row[6].value
@@ -140,25 +152,23 @@ def update_mercedes_file(data_list, mercedes_file):
             else:
                 abs_value = abs_value_raw
             existing_data[(sachnummer, str(abs_value))] = row
-            print(f"  Sachnummer: {sachnummer} (type: {type(sachnummer)}), ABS: {abs_value} (type: {type(abs_value)})")  # Debugging line
+    
+    # Create a dictionary for faster lookup of Rückstand
+    ruckstand_data = {}
+    for item in data_list_ruckstand:
+        ruckstand_data[(item["customer_item"], item["abs_value"])] = item["ruckstand"]
 
-    print("\nIncoming data from input files:")  # Debugging line
     for data in data_list:
         sachnummer = data["customer_item"]
         abs_value = data["abs_value"]
         quantities = data["quantities"]
         calendar_weeks = data["calendar_weeks"]
-        print(f"  Sachnummer: {sachnummer} (type: {type(sachnummer)}), ABS: {abs_value} (type: {type(abs_value)})")  # Debugging line
 
         # Find the row or create a new one
         match_key = (sachnummer, str(abs_value))
         if match_key in existing_data:
-            print(f"    Match found! Key: {match_key}")  # Debugging line
             row = existing_data[match_key]
-            print(f"    Data before filling: {[cell.value for cell in row]}")
         else:
-            print(f"    No match found. Adding new row. Key: {match_key}")  # Debugging line
-            print(f"    --------------------------------")  # Debugging line
             # Add a new row
             new_row = [None] * ws.max_column
             ws.append(new_row)
@@ -169,8 +179,9 @@ def update_mercedes_file(data_list, mercedes_file):
             # Highlight the new row in yellow
             for cell in row:
                 cell.fill = yellow_fill
-            print(f"    New row added: {[cell.value for cell in row]}")
-
+        # Fill Rückstand
+        if match_key in ruckstand_data:
+            row[9].value = ruckstand_data[match_key]
         # Fill in the quantities and calendar weeks
         columns = [11, 13, 15, 17, 19]  # K, M, O, Q, S (Corrected indices)
         for i, (qty, cw) in enumerate(zip(quantities, calendar_weeks)):
@@ -178,8 +189,6 @@ def update_mercedes_file(data_list, mercedes_file):
                 row[columns[i]-1].value = qty
             if cw is not None:
                 ws.cell(row=1, column=columns[i]).value = cw
-        print(f"    Data after filling: {[cell.value for cell in row]}")
-
     try:
         wb.save(mercedes_file)
     except PermissionError:
