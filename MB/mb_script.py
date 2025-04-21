@@ -143,12 +143,12 @@ def update_mercedes_file(data_list, data_list_ruckstand, mercedes_file):
     # Create a dictionary to store existing data for faster lookup
     existing_data = {}
     for row in ws.iter_rows(min_row=2):
-        sachnummer = row[3].value
-        abs_value_raw = row[6].value
+        sachnummer = row[3+10].value
+        abs_value_raw = row[6+9].value
         if sachnummer and abs_value_raw:
             if isinstance(abs_value_raw, str) and abs_value_raw.startswith("ABS "):
                 abs_value = abs_value_raw.split(" ", 1)[1]
-                row[6].value = abs_value
+                row[6+9].value = abs_value
             else:
                 abs_value = abs_value_raw
             existing_data[(sachnummer, str(abs_value))] = row
@@ -174,16 +174,16 @@ def update_mercedes_file(data_list, data_list_ruckstand, mercedes_file):
             ws.append(new_row)
             rows_list = list(ws.rows)
             row = rows_list[-1]
-            row[3].value = sachnummer  # Sachnummer
-            row[6].value = abs_value  # ABS
+            row[3+10].value = sachnummer  # Sachnummer
+            row[6+9].value = abs_value  # ABS
             # Highlight the new row in yellow
             for cell in row:
                 cell.fill = yellow_fill
         # Fill Rückstand
         if match_key in ruckstand_data:
-            row[9].value = ruckstand_data[match_key]
+            row[9+8].value = ruckstand_data[match_key]
         # Fill in the quantities and calendar weeks
-        columns = [11, 13, 15, 17, 19]  # K, M, O, Q, S (Corrected indices)
+        columns = [11+8, 13+8, 15+8, 17+8, 19+8]  #  (Corrected indices)
         for i, (qty, cw) in enumerate(zip(quantities, calendar_weeks)):
             if qty is not None:
                 row[columns[i]-1].value = qty
