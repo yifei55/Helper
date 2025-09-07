@@ -51,8 +51,15 @@ def process_mb_files(input_dir, output_file, mercedes_file):
                     temp_data_bedarf = []
                     for cw, qty in zip(calendar_weeks, quantities_bedarf):
                         # --- MODIFICATION: Include weeks with zero quantity to ensure data integrity ---
-                        if pd.notna(cw) and pd.notna(qty):
-                            temp_data_bedarf.append({"customer_item": customer_item, "calendar_week": cw, "quantity": int(qty)})
+                        if pd.notna(cw):
+                            # --- MODIFICATION: Handle non-numeric or missing quantities gracefully ---
+                            try:
+                                # Convert to int, defaulting to 0 if it's NaN or not a number
+                                final_qty = int(qty) if pd.notna(qty) else 0
+                                temp_data_bedarf.append({"customer_item": customer_item, "calendar_week": cw, "quantity": final_qty})
+                            except (ValueError, TypeError):
+                                # If conversion fails, treat it as 0
+                                temp_data_bedarf.append({"customer_item": customer_item, "calendar_week": cw, "quantity": 0})
                     
                     if temp_data_bedarf:
                         temp_data_bedarf.sort(key=lambda x: (int(x['calendar_week'].split('/')[1]), int(x['calendar_week'].split('/')[0])))
