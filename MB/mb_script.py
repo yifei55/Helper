@@ -288,7 +288,7 @@ def create_output_excel(data_list, output_file):
 
 def update_forecast_file(source_data_file, forecast_file_path):
     """
-    Updates the 'forecast for all projects.xlsx' with data from the generated
+    Updates the 'Mercedes Benz Forecast.xlsx' with data from the generated
     'mb_extracted_data_...' file.
     """
     print(f"\nStarting update of master forecast file: '{forecast_file_path}'")
@@ -305,8 +305,14 @@ def update_forecast_file(source_data_file, forecast_file_path):
 
         # 2. Load the destination forecast workbook and get the active sheet
         wb = load_workbook(forecast_file_path)
-        ws = wb.active
-
+        sheet_name = "Weekly Demand for MB&Daimler"
+        try:
+            ws = wb[sheet_name]
+        except KeyError:
+            print(f"Error: Worksheet '{sheet_name}' not found in '{forecast_file_path}'.")
+            print(f"Available sheets are: {wb.sheetnames}")
+            return
+            
         # 3. Get the week numbers from the header of the forecast file
         # Assuming headers are in the first row and week numbers start from the second column
         forecast_headers = [cell.value for cell in ws[1]]
@@ -374,6 +380,6 @@ if __name__ == "__main__":
     process_mb_files(input_directory, output_excel_file, mercedes_excel_file)
 
     # --- New Step: Update the master forecast file ---
-    forecast_master_file = "forecast for all projects.xlsx"
+    forecast_master_file = "Mercedes Benz Forecast.xlsx"
     forecast_file_path = os.path.join(input_directory, forecast_master_file)
     update_forecast_file(output_excel_file, forecast_file_path)
