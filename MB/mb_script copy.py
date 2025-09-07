@@ -5,7 +5,7 @@ from openpyxl.styles import Font, Alignment, PatternFill
 import re
 from datetime import datetime, date
 import zipfile
-import shutil
+
 def get_current_calendar_week():
     """Calculates the current calendar week in the format 'WW/YYYY'."""
     now = date.today()
@@ -18,11 +18,10 @@ def process_mb_files(input_dir, output_file, mercedes_file):
     all_data_bedarfs = []
     all_data_ruckstand = []
     print(f"Processing files in directory: {input_dir}")  # Add this line
-    # --- MODIFICATION: Only process files that start with 'BKM Lieferbeziehung' ---
     for filename in os.listdir(input_dir):
-        # This check is now more specific to avoid processing output/master files.
-        if filename.startswith('BKM Lieferbeziehung') and filename.endswith(('.xls', '.xlsx')) and not filename.startswith('~$'):
-            print(f"Processing MB report file: {filename}")
+        print(f"Checking file: {filename}")  # Add this line
+        if filename.endswith(('.xls', '.xlsx')) and not filename.startswith(("mb_extracted_data_", "~$")) and filename != os.path.basename(mercedes_file):
+            print(f"Processing file: {filename}")  # Add this line
             filepath = os.path.join(input_dir, filename)
             try:
                 df = pd.read_excel(filepath, sheet_name="Zeitraum bis Bedarfsende", header=None)
@@ -37,28 +36,15 @@ def process_mb_files(input_dir, output_file, mercedes_file):
                 # Extract calendar weeks from row 6 (index 5)
                 calendar_weeks = df.iloc[5, 1:].tolist()
 
-                # --- MODIFICATION: Dynamically find the 'Bedarf' row ---
-                bedarf_row_index = -1
-                for index, row in df.iterrows():
-                    # Check if the first cell in the row contains 'Bedarf'
-                    if 'Bedarf' in str(row.iloc[0]):
-                        bedarf_row_index = index
-                        break # Found it, no need to search further
-                
-                if bedarf_row_index != -1:
-                    # The quantities are in the row immediately following the 'Bedarf' label row
-                    quantities_bedarf = df.iloc[bedarf_row_index + 1, 1:].tolist()
-                    temp_data_bedarf = []
-                    for cw, qty in zip(calendar_weeks, quantities_bedarf):
-                        # --- MODIFICATION: Include weeks with zero quantity to ensure data integrity ---
-                        if pd.notna(cw) and pd.notna(qty):
-                            temp_data_bedarf.append({"customer_item": customer_item, "calendar_week": cw, "quantity": int(qty)})
-                    
-                    if temp_data_bedarf:
-                        temp_data_bedarf.sort(key=lambda x: (int(x['calendar_week'].split('/')[1]), int(x['calendar_week'].split('/')[0])))
-                        all_data_bedarfs.extend(temp_data_bedarf)
-                else:
-                    print(f"Warning: 'Bedarf' row not found for {customer_item} in {filename}. Skipping demand data.")
+                # Extract data for Bedarf
+                quantities_bedarf = df.iloc[7, 1:].tolist()
+                temp_data_bedarf = []
+                for cw, qty in zip(calendar_weeks, quantities_bedarf):
+                    if pd.notna(cw) and pd.notna(qty):
+                        temp_data_bedarf.append({"customer_item": customer_item, "calendar_week": cw, "quantity": int(qty)})
+                temp_data_bedarf.sort(key=lambda x: (int(x['calendar_week'].split('/')[1]), int(x['calendar_week'].split('/')[0])))
+                all_data_bedarfs.extend(temp_data_bedarf)
+
                 # Find rows with "ABS" followed by a number
                 abs_rows = []
                 for index, row in df.iterrows():
@@ -119,24 +105,7 @@ def process_mb_files(input_dir, output_file, mercedes_file):
                 print(f"Error processing {filename}: {e}")
 
     if all_data:
-        # --- New Requirement: Create a timestamped copy and update it ---
-        if not os.path.exists(mercedes_file):
-            print(f"Error: Original Mercedes file '{mercedes_file}' not found. Cannot create a copy.")
-        else:
-            try:
-                # Generate timestamp YYMMDDHH
-                timestamp = datetime.now().strftime("%y%m%d%H")
-                file_name, file_extension = os.path.splitext(mercedes_file)
-                
-                # Create the new filename for the copy
-                mercedes_copy_file = f"{file_name}_{timestamp}{file_extension}"
-                
-                # Copy the file
-                shutil.copy2(mercedes_file, mercedes_copy_file)
-                print(f"Created a copy for updating: '{mercedes_copy_file}'")
-                update_mercedes_file(all_data, all_data_ruckstand, mercedes_copy_file)
-            except Exception as e:
-                print(f"Error creating or updating the Mercedes file copy: {e}")
+        update_mercedes_file(all_data, all_data_ruckstand, mercedes_file)
     if all_data_bedarfs:
         create_output_excel(all_data_bedarfs, output_file)
         print(f"Output saved to: {output_file}")
@@ -299,107 +268,9 @@ def create_output_excel(data_list, output_file):
         ws.column_dimensions[column].width = adjusted_width
     wb.save(output_file)
 
-def update_forecast_file(source_data_file, forecast_file_path):
-    """
-    Updates the 'Mercedes Benz Forecast.xlsx' with data from the generated
-    'mb_extracted_data_...' file.
-    """
-    print(f"\nStarting update of master forecast file: '{forecast_file_path}'")
-    if not os.path.exists(source_data_file):
-        print(f"Error: Source data file '{source_data_file}' not found. Skipping forecast update.")
-        return
-    if not os.path.exists(forecast_file_path):
-        print(f"Error: Master forecast file '{forecast_file_path}' not found. Skipping forecast update.")
-        return
-
-    try:
-        # 1. Load the source data (mb_extracted_data_...)
-        source_df = pd.read_excel(source_data_file)
-
-        # 2. Load the destination forecast workbook and get the active sheet
-        wb = load_workbook(forecast_file_path)
-        sheet_name = "Weekly Demand for MB&Daimler"
-        try:
-            ws = wb[sheet_name]
-        except KeyError:
-            print(f"Error: Worksheet '{sheet_name}' not found in '{forecast_file_path}'.")
-            print(f"Available sheets are: {wb.sheetnames}")
-            return
-            
-        # 3. Get the week numbers from the header of the forecast file
-        # Assuming headers are in the first row and week numbers start from the second column
-        forecast_headers = [cell.value for cell in ws[1]]
-        # Find the column index for 'Customer Item' or a similar identifier
-        try:
-            item_col_name = 'Customer Item' # Adjust if the name is different
-            item_col_idx = forecast_headers.index(item_col_name) + 1
-        except ValueError:
-            print(f"Error: Column '{item_col_name}' not found in '{forecast_file_path}'. Cannot match items.")
-            return
-
-        # --- MODIFICATION: Match exact 'WW/YYYY' format ---
-        # Create a map of 'WW/YYYY' strings to their column index.
-        week_cols = {} # e.g., {'10/2025': 5, '11/2025': 6}
-        for i, h in enumerate(forecast_headers):
-            # Check if the header matches the 'WW/YYYY' pattern
-            if isinstance(h, str) and re.match(r'^\d{1,2}/\d{4}$', h):
-                week_cols[h] = i + 1
-
-        if not week_cols:
-            print(f"Error: No columns with 'WW/YYYY' format found in the header of '{forecast_file_path}'.")
-            return
-
-        print(f"Found {len(week_cols)} week columns (e.g., 'WW/YYYY') in the forecast file.")
-
-
-        # 4. Create a map of 'Customer Item' to its row number in the forecast sheet
-        print("Building 'Customer Item' to row number map from the forecast file...")
-        item_row_map = {str(ws.cell(row=r, column=item_col_idx).value): r for r in range(2, ws.max_row + 1)}
-        print(f"Found {len(item_row_map)} unique items in the forecast file.")
-        if not item_row_map:
-            print("Warning: No items found in the 'Customer Item' column of the forecast file. Cannot update.")
-            return
-
-        # 5. Iterate through the source data and update the forecast sheet
-        print("\nProcessing source data and attempting to update forecast sheet...")
-        updates_made = 0
-        for _, source_row in source_df.iterrows():
-            customer_item = str(source_row['Customer Item'])
-            if customer_item in item_row_map:
-                target_row_idx = item_row_map[customer_item]
-                print(f"  - Match found for item: {customer_item} at row {target_row_idx}.")
-                # Iterate through the week columns in the source data
-                for col_name in source_df.columns:
-                    if '/' in str(col_name): # Identifies week columns like '36/2024'
-                        # Exact match on the 'WW/YYYY' string
-                        if col_name in week_cols:
-                            target_col_idx = week_cols[col_name]
-                            quantity = source_row[col_name]
-                            ws.cell(row=target_row_idx, column=target_col_idx).value = quantity
-                            print(f"    -> Updating Week {col_name} (Column {target_col_idx}) with quantity: {quantity}")
-                            updates_made += 1
-            else:
-                print(f"  - No match found in forecast file for source item: {customer_item}. Skipping.")
-
-        # 6. Save the updated workbook
-        if updates_made > 0:
-            print(f"\nTotal updates made: {updates_made}. Saving file...")
-            wb.save(forecast_file_path)
-            print(f"Successfully updated and saved '{forecast_file_path}'.")
-        else:
-            print("\nNo matching data found to update in the forecast file. File was not saved.")
-
-    except Exception as e:
-        print(f"An unexpected error occurred during the forecast update: {e}")
-
 if __name__ == "__main__":
     input_directory = os.path.dirname(os.path.abspath(__file__))
     timestamp = datetime.now().strftime("%y%m%d_%H%M")
     output_excel_file = f"mb_extracted_data_{timestamp}.xlsx"
     mercedes_excel_file = "Mercedes_Shipping_Plan_EDI.xlsx"
     process_mb_files(input_directory, output_excel_file, mercedes_excel_file)
-
-    # --- New Step: Update the master forecast file ---
-    forecast_master_file = "Mercedes Benz Forecast.xlsx"
-    forecast_file_path = os.path.join(input_directory, forecast_master_file)
-    update_forecast_file(output_excel_file, forecast_file_path)
