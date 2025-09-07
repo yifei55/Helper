@@ -346,28 +346,45 @@ def update_forecast_file(source_data_file, forecast_file_path):
         print(f"Master forecast starts at week {start_week}. Weeks before this will be ignored.")
 
         # 4. Create a map of 'Customer Item' to its row number in the forecast sheet
+        print("Building 'Customer Item' to row number map from the forecast file...")
         item_row_map = {str(ws.cell(row=r, column=item_col_idx).value): r for r in range(2, ws.max_row + 1)}
+        print(f"Found {len(item_row_map)} unique items in the forecast file.")
+        if not item_row_map:
+            print("Warning: No items found in the 'Customer Item' column of the forecast file. Cannot update.")
+            return
 
         # 5. Iterate through the source data and update the forecast sheet
+        print("\nProcessing source data and attempting to update forecast sheet...")
+        updates_made = 0
         for _, source_row in source_df.iterrows():
             customer_item = str(source_row['Customer Item'])
             if customer_item in item_row_map:
                 target_row_idx = item_row_map[customer_item]
+                print(f"  - Match found for item: {customer_item} at row {target_row_idx}.")
                 # Iterate through the week columns in the source data
                 for col_name in source_df.columns:
                     if '/' in str(col_name): # Identifies week columns like '36/2024'
                         try:
                             week_num = int(col_name.split('/')[0])
                             if week_num >= start_week and week_num in week_cols:
+                                # This is where the update happens
                                 target_col_idx = week_cols[week_num]
                                 quantity = source_row[col_name]
                                 ws.cell(row=target_row_idx, column=target_col_idx).value = quantity
+                                print(f"    -> Updating Week {week_num} (Column {target_col_idx}) with quantity: {quantity}")
+                                updates_made += 1
                         except (ValueError, IndexError):
                             continue # Ignore columns that are not in the 'WW/YYYY' format
+            else:
+                print(f"  - No match found in forecast file for source item: {customer_item}. Skipping.")
 
         # 6. Save the updated workbook
-        wb.save(forecast_file_path)
-        print(f"Successfully updated and saved '{forecast_file_path}'.")
+        if updates_made > 0:
+            print(f"\nTotal updates made: {updates_made}. Saving file...")
+            wb.save(forecast_file_path)
+            print(f"Successfully updated and saved '{forecast_file_path}'.")
+        else:
+            print("\nNo matching data found to update in the forecast file. File was not saved.")
 
     except Exception as e:
         print(f"An unexpected error occurred during the forecast update: {e}")
