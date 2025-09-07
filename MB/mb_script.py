@@ -324,26 +324,20 @@ def update_forecast_file(source_data_file, forecast_file_path):
             print(f"Error: Column '{item_col_name}' not found in '{forecast_file_path}'. Cannot match items.")
             return
 
-        # --- MODIFICATION: Make week number detection more robust ---
-        # It will now try to convert header values to integers.
-        week_cols = {}
+        # --- MODIFICATION: Match exact 'WW/YYYY' format ---
+        # Create a map of 'WW/YYYY' strings to their column index.
+        week_cols = {} # e.g., {'10/2025': 5, '11/2025': 6}
         for i, h in enumerate(forecast_headers):
-            try:
-                # --- MODIFICATION: Handle headers like "week 36" ---
-                # Use regex to find any number in the header string.
-                match = re.search(r'\d+', str(h))
-                if match:
-                    week_num = int(match.group(0))
-                    week_cols[week_num] = i + 1
-            except (ValueError, TypeError):
-                continue # Ignore headers that can't be processed
+            # Check if the header matches the 'WW/YYYY' pattern
+            if isinstance(h, str) and re.match(r'^\d{1,2}/\d{4}$', h):
+                week_cols[h] = i + 1
 
         if not week_cols:
-            print(f"Error: No integer week number columns found in '{forecast_file_path}'.")
+            print(f"Error: No columns with 'WW/YYYY' format found in the header of '{forecast_file_path}'.")
             return
 
-        start_week = min(week_cols.keys())
-        print(f"Master forecast starts at week {start_week}. Weeks before this will be ignored.")
+        print(f"Found {len(week_cols)} week columns (e.g., 'WW/YYYY') in the forecast file.")
+
 
         # 4. Create a map of 'Customer Item' to its row number in the forecast sheet
         print("Building 'Customer Item' to row number map from the forecast file...")
@@ -364,17 +358,13 @@ def update_forecast_file(source_data_file, forecast_file_path):
                 # Iterate through the week columns in the source data
                 for col_name in source_df.columns:
                     if '/' in str(col_name): # Identifies week columns like '36/2024'
-                        try:
-                            week_num = int(col_name.split('/')[0])
-                            if week_num >= start_week and week_num in week_cols:
-                                # This is where the update happens
-                                target_col_idx = week_cols[week_num]
-                                quantity = source_row[col_name]
-                                ws.cell(row=target_row_idx, column=target_col_idx).value = quantity
-                                print(f"    -> Updating Week {week_num} (Column {target_col_idx}) with quantity: {quantity}")
-                                updates_made += 1
-                        except (ValueError, IndexError):
-                            continue # Ignore columns that are not in the 'WW/YYYY' format
+                        # Exact match on the 'WW/YYYY' string
+                        if col_name in week_cols:
+                            target_col_idx = week_cols[col_name]
+                            quantity = source_row[col_name]
+                            ws.cell(row=target_row_idx, column=target_col_idx).value = quantity
+                            print(f"    -> Updating Week {col_name} (Column {target_col_idx}) with quantity: {quantity}")
+                            updates_made += 1
             else:
                 print(f"  - No match found in forecast file for source item: {customer_item}. Skipping.")
 
